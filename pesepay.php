@@ -16,7 +16,7 @@
  * Plugin Name:       Pesepay
  * Plugin URI:        https://pesepay.com
  * Description:       Robust & Secure online payments solution for Africa.
- * Version:           1.3.0
+ * Version:           1.4.0
  * Author:            Pesepay
  * Author URI:        https://pesepay.com
  * License:           GPL-2.0+
@@ -35,7 +35,7 @@ if (!defined('WPINC')) {
  * Start at version 1.0.0 and use SemVer - https://semver.org
  * Rename this for your plugin and update it as you release new versions.
  */
-define('PESEPAY_VERSION', '1.3.0');
+define('PESEPAY_VERSION', '1.4.0');
 
 /**
  * Plugin unique short name.
