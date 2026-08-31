@@ -45,6 +45,7 @@ If you are signing up for your own business, you simply need to click on the Sig
 == Changelog ==
 
 = 1.3.0 =
+* Added sandbox / test mode with dedicated test credentials and Pesepay sandbox endpoints.
 * Improved checkout messaging when Pesepay is unavailable.
 * Added admin diagnostics for Pesepay setup issues.
 * Prevented inline currency API calls during page loads to avoid slowdowns when Pesepay is unreachable.
@@ -59,6 +60,7 @@ If you are signing up for your own business, you simply need to click on the Sig
 == Upgrade Notice ==
 
 = 1.3.0 =
+* Adds sandbox/test mode support. Existing live installations are unaffected — test mode is disabled by default.
 * Improves storefront/admin resilience by avoiding inline currency API calls during normal page loads.
 
 = 1.2.9 =

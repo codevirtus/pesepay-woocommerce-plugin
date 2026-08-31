@@ -83,15 +83,27 @@ class Pesepay_Admin
 		}
 
 		$issues = array();
-		$integration_key = (string) $gateway->get_option('integration_key', '');
-		$encryption_key = (string) $gateway->get_option('encryption_key', '');
 
-		if ($integration_key === '') {
-			$issues[] = __('Integration Key is missing.', PESEPAY_SLUG);
-		}
+		if ($gateway->get_option('test_mode') === 'yes') {
+			$integration_key = (string) $gateway->get_option('test_integration_key', '');
+			$encryption_key  = (string) $gateway->get_option('test_encryption_key', '');
 
-		if ($encryption_key === '') {
-			$issues[] = __('Encryption Key is missing.', PESEPAY_SLUG);
+			if ($integration_key === '') {
+				$issues[] = __('Test mode is enabled but Test Integration Key is missing.', PESEPAY_SLUG);
+			}
+			if ($encryption_key === '') {
+				$issues[] = __('Test mode is enabled but Test Encryption Key is missing.', PESEPAY_SLUG);
+			}
+		} else {
+			$integration_key = (string) $gateway->get_option('integration_key', '');
+			$encryption_key  = (string) $gateway->get_option('encryption_key', '');
+
+			if ($integration_key === '') {
+				$issues[] = __('Integration Key is missing.', PESEPAY_SLUG);
+			}
+			if ($encryption_key === '') {
+				$issues[] = __('Encryption Key is missing.', PESEPAY_SLUG);
+			}
 		}
 
 		$currencies = wp_parse_list($gateway->get_option('currencies', array()));
