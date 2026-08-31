@@ -51,9 +51,9 @@ class PesePay_Helper
     }
 
     /**
-     * Get the base api url
+     * Get the live API base URL.
      *
-     * Allows building urls on top of the base by appending given path
+     * Allows building URLs on top of the base by appending a given path.
      *
      * @version 1.0.0
      * @since 1.0.0
@@ -66,6 +66,77 @@ class PesePay_Helper
     }
 
     /**
+     * Get the sandbox API base URL.
+     *
+     * @since 1.3.0
+     * @param string $path
+     * @return string
+     */
+    public static function get_sandbox_base_url($path = "")
+    {
+        return "https://api.test.sandbox.pesepay.com/payments-engine/" . ltrim($path, "\\/");
+    }
+
+    /**
+     * Return credentials and endpoints for the active environment.
+     *
+     * When $mode is null the global test_mode gateway setting determines the
+     * environment. Pass 'live' or 'test' explicitly to override (used when
+     * re-checking a payment using the environment saved at initiation time).
+     *
+     * Returns false when:
+     *   - the gateway instance is not available, or
+     *   - test mode is requested but either test key is missing.
+     *
+     * Never mixes live and test credentials.
+     *
+     * @since 1.3.0
+     * @param string|null          $mode             'live', 'test', or null (auto-detect).
+     * @param WC_Pesepay_Gateway|object|null $gateway Optional gateway instance (used in tests).
+     * @return array|false
+     */
+    public static function get_environment_config($mode = null, $gateway = null)
+    {
+        if ($gateway === null) {
+            $gateway = self::get_gateway_instance();
+        }
+
+        if (!is_object($gateway)) {
+            return false;
+        }
+
+        if ($mode === null) {
+            $mode = ($gateway->get_option('test_mode') === 'yes') ? 'test' : 'live';
+        }
+
+        if ($mode === 'test') {
+            $integration_key = (string) $gateway->get_option('test_integration_key', '');
+            $encryption_key = (string) $gateway->get_option('test_encryption_key', '');
+
+            if ($integration_key === '' || $encryption_key === '') {
+                return false;
+            }
+
+            return array(
+                'mode' => 'test',
+                'integration_key' => $integration_key,
+                'encryption_key' => $encryption_key,
+                'initiate_url' => self::get_sandbox_base_url('v1/payments/initiate'),
+                'check_url' => self::get_sandbox_base_url('v1/payments/check-payment'),
+            );
+        }
+
+        // Live mode — always use live credentials and endpoints.
+        return array(
+            'mode' => 'live',
+            'integration_key' => (string) $gateway->get_option('integration_key', ''),
+            'encryption_key' => (string) $gateway->get_option('encryption_key', ''),
+            'initiate_url' => self::get_remote_base_url('v1/payments/initiate'),
+            'check_url' => self::get_remote_base_url('v1/payments/check-payment'),
+        );
+    }
+
+    /**
      * Get currencies supported by pesepay
      *
      * Will request directly from pesepay and cache for 1/4 Day
@@ -74,7 +145,7 @@ class PesePay_Helper
      * @since 1.0.0
      * @return array|string
      */
-    public static    function get_supported_currencies()
+    public static function get_supported_currencies()
     {
 
         $currencies = get_transient(PESEPAY_SLUG . "-currencies");
@@ -113,7 +184,7 @@ class PesePay_Helper
     {
 
         if (function_exists("WC") && isset(WC()->payment_gateways->payment_gateways()[self::get_gateway_id()])) {
-            return  WC()->payment_gateways->payment_gateways()[self::get_gateway_id()];
+            return WC()->payment_gateways->payment_gateways()[self::get_gateway_id()];
         }
         return false;
     }
@@ -184,8 +255,11 @@ class PesePay_Helper
      */
     public static function remote_init_transaction($amount, $currency, $reason, $links)
     {
+        $config = self::get_environment_config();
 
-        $url = "v1/payments/initiate";
+        if (!$config) {
+            return false;
+        }
 
         $data = array(
             "amountDetails" => array(
@@ -197,105 +271,119 @@ class PesePay_Helper
             "returnUrl" => $links["returnUrl"]
         );
 
-        return self::remote_request($url, $data);
+        self::log('[' . $config['mode'] . '] Initiating transaction');
+
+        return self::remote_request($config['initiate_url'], $data, "POST", $config);
     }
 
     /**
      * Check the status of a transaction
      *
+     * Pass $mode = 'live' or 'test' to use the environment recorded at payment
+     * initiation time (stored in order meta) so that sandbox transactions are
+     * never checked against the live endpoint, even if the global setting
+     * has since been changed.
+     *
      * @since 1.0.0
-     * @version 1.0.0
+     * @version 1.3.0
      * @param string $reference
+     * @param string|null $mode 'live', 'test', or null (use current global setting).
      * @return array|bool
      */
-    public static function remote_check_transaction($reference)
+    public static function remote_check_transaction($reference, $mode = null)
     {
+        $config = self::get_environment_config($mode);
 
-        $url =  "v1/payments/check-payment";
+        if (!$config) {
+            return false;
+        }
 
         $data = array(
             "referenceNumber" => $reference
         );
 
-        return self::remote_request($url, $data, "GET");
+        self::log('[' . $config['mode'] . '] Checking transaction status');
+
+        return self::remote_request($config['check_url'], $data, "GET", $config);
     }
 
     /**
      * Perform remote request to pesepay
      *
      * @since 1.0.0
-     * @version 1.0.0
-     * @param string $path
-     * @param string $payload
+     * @version 1.3.0
+     * @param string $url     Full endpoint URL.
+     * @param array|string $payload
+     * @param string $method  HTTP method.
+     * @param array|null $config Environment config from get_environment_config().
      * @return array|bool
      */
-    private static function remote_request($path, $payload = "", $method = "POST")
+    private static function remote_request($url, $payload = "", $method = "POST", $config = null)
     {
+        if ($config === null) {
+            $config = self::get_environment_config();
+        }
 
-        $gateway = self::get_gateway_instance();
+        if (!$config) {
+            return false;
+        }
 
-        if (is_object($gateway)) {
+        $headers = array(
+            'Authorization' => $config['integration_key']
+        );
 
-            $headers = array(
-                'Authorization' => $gateway->get_option('integration_key')
-            );
-
-            if (!str_starts_with($path, "http")) {
-                $url = self::get_remote_base_url($path);
-            }
-
-            /**
-             * Post takes different params from get
-             */
-            $response = false;
-            switch (strtoupper($method)) {
-                case "POST":
-                    if (is_array($payload)) {
-                        $payload = json_encode($payload);
-                    }
-
-                    $data = self::content_encrypt($gateway->get_option('encryption_key'), $payload);
-                    $payload = array("payload" => $data);
-
-                    $response =    wp_safe_remote_post($url, array(
-                        "body" => json_encode($payload),
-                        "headers" => array_merge($headers, array(
-                            'Content-Type' => 'application/json'
-                        ))
-                    ));
-                    break;
-                case "GET":
-                    $url = add_query_arg($payload, $url);
-
-                    $response =    wp_safe_remote_get($url, array(
-                        "headers" => $headers
-                    ));
-                    break;
-            }
-
-            if ($response && !is_wp_error($response)  && wp_remote_retrieve_response_code($response) == 200) {
-
-                $payload = wp_remote_retrieve_body($response);
-
-                if ($payload) {
-
-                    $payload = json_decode($payload, true);
-
-                    if (isset($payload["payload"])) {
-
-                        $data = self::content_decrypt($gateway->get_option('encryption_key'), $payload["payload"]);
-                        $success = true;
-                    } else {
-                        $data =  $payload["message"];
-                        $success = false;
-                    }
-                    return array(
-                        "success" => $success,
-                        "data" => json_decode($data, true)
-                    );
+        /**
+         * Post takes different params from get
+         */
+        $response = false;
+        switch (strtoupper($method)) {
+            case "POST":
+                if (is_array($payload)) {
+                    $payload = json_encode($payload);
                 }
+
+                $data = self::content_encrypt($config['encryption_key'], $payload);
+                $payload = array("payload" => $data);
+
+                $response = wp_safe_remote_post($url, array(
+                    "body" => json_encode($payload),
+                    "headers" => array_merge($headers, array(
+                        'Content-Type' => 'application/json'
+                    ))
+                ));
+                break;
+            case "GET":
+                $url = add_query_arg($payload, $url);
+
+                $response = wp_safe_remote_get($url, array(
+                    "headers" => $headers
+                ));
+                break;
+        }
+
+        if ($response && !is_wp_error($response) && wp_remote_retrieve_response_code($response) == 200) {
+
+            $payload = wp_remote_retrieve_body($response);
+
+            if ($payload) {
+
+                $payload = json_decode($payload, true);
+
+                if (isset($payload["payload"])) {
+
+                    $data = self::content_decrypt($config['encryption_key'], $payload["payload"]);
+                    $success = true;
+                } else {
+                    $data = $payload["message"];
+                    $success = false;
+                }
+                return array(
+                    "success" => $success,
+                    "data" => json_decode($data, true)
+                );
             }
         }
+
         return false;
     }
 

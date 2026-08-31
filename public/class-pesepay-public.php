@@ -73,7 +73,10 @@ class Pesepay_Public
 
             $reference = $order->get_meta(PesePay_Helper::meta_key_prefix("-reference-number"));
 
-            $response = PesePay_Helper::remote_check_transaction($reference);
+            // Use the environment recorded at payment initiation.
+            $mode = $order->get_meta(PesePay_Helper::meta_key_prefix("-environment")) ?: 'live';
+
+            $response = PesePay_Helper::remote_check_transaction($reference, $mode);
 
             if ($response) {
                 #    die(json_encode($response));
@@ -224,8 +227,13 @@ class Pesepay_Public
             return false;
         }
 
-        $integration_key = (string) $gateway->get_option('integration_key', '');
-        $encryption_key = (string) $gateway->get_option('encryption_key', '');
+        if ($gateway->get_option('test_mode') === 'yes') {
+            $integration_key = (string) $gateway->get_option('test_integration_key', '');
+            $encryption_key = (string) $gateway->get_option('test_encryption_key', '');
+        } else {
+            $integration_key = (string) $gateway->get_option('integration_key', '');
+            $encryption_key = (string) $gateway->get_option('encryption_key', '');
+        }
 
         if ($integration_key === '') {
             return 'missing_integration_key';
