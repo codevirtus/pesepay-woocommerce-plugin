@@ -59,7 +59,7 @@ class Pesepay_Public
      * Handle response from pesepay
      *
      * @since 1.0.0
-     * @version 1.0.0
+     * @version 1.4.0
      * @return array
      */
     public function woocommerce_api_wc_gateway()
@@ -71,6 +71,18 @@ class Pesepay_Public
 
             $order = wc_get_order($order);
 
+            // Order is already marked as paid — send the customer straight through.
+            if (in_array($order->get_status(), wc_get_is_paid_statuses(), true)) {
+                $gateway = PesePay_Helper::get_gateway_instance();
+
+                if (is_object($gateway)) {
+                    wp_redirect($gateway->get_return_url($order));
+                } else {
+                    wp_redirect($order->get_checkout_order_received_url());
+                }
+                return;
+            }
+
             $reference = $order->get_meta(PesePay_Helper::meta_key_prefix("-reference-number"));
 
             // Use the environment recorded at payment initiation.
@@ -78,70 +90,91 @@ class Pesepay_Public
 
             $response = PesePay_Helper::remote_check_transaction($reference, $mode);
 
-            if ($response) {
-                #    die(json_encode($response));
-                if ($response["success"]) {
+            // Log the raw response for debugging.
+            PesePay_Helper::log(
+                vsprintf('Status check (return) for order #%1$s (ref %2$s): %3$s', array(
+                    $order->get_id(),
+                    $reference,
+                    wp_json_encode($response)
+                ))
+            );
 
-                    # Save the reference number and/or poll url (used to check the status of a transaction)
-                    $order->update_meta_data(PesePay_Helper::meta_key_prefix("-reference-number"), $response["data"]["referenceNumber"]);
-                    $order->save_meta_data();
+            if ($response && $response["success"]) {
 
-                    #
+                # Save the reference number and/or poll url (used to check the status of a transaction)
+                $order->update_meta_data(PesePay_Helper::meta_key_prefix("-reference-number"), $response["data"]["referenceNumber"]);
+                $order->save_meta_data();
 
-                    switch (strtoupper($response["data"]["transactionStatus"])) {
-                        case "CANCELLED":
-                            $message = __("Transaction cancelled on Pesepay", $this->plugin_name);
+                $status = strtoupper($response["data"]["transactionStatus"]);
+                $description = isset($response["data"]["transactionStatusDescription"]) ? $response["data"]["transactionStatusDescription"] : '';
 
-                            wc_add_notice($message, "error");
+                $order->add_order_note(sprintf(__('Pesepay status: %1$s | Ref: %2$s | %3$s', PESEPAY_SLUG), $status, $reference, $description));
 
-                            PesePay_Helper::log($message . " Order #: " . $order->get_id());
+                switch ($status) {
+                    case "SUCCESS":
+                    case "SUCCEEDED":
+                        //payment confirmed
+                        $order->payment_complete();
 
-                            break;
-                        case "SUCCESS":
-                            //payment confirmed
-                            $order->payment_complete();
+                        // Reduce stock levels
+                        wc_reduce_stock_levels($order->get_id());
 
-                            // Reduce stock levels
-                            wc_reduce_stock_levels($order->get_id());
+                        $order->update_meta_data(PesePay_Helper::meta_key_prefix("-transaction-status"), "SUCCESS");
+                        $order->delete_meta_data(PesePay_Helper::meta_key_prefix("-check-attempts"));
+                        $order->delete_meta_data(PesePay_Helper::meta_key_prefix("-failed-verify"));
+                        $order->save_meta_data();
 
-                            PesePay_Helper::log(__("Payment Completed", $this->plugin_name) . " Order #: " . $order->get_id());
+                        pesepay_clear_status_checks($order->get_id());
 
-                            $gateway = PesePay_Helper::get_gateway_instance();
+                        PesePay_Helper::log(__("Payment Completed", $this->plugin_name) . " Order #: " . $order->get_id());
 
-                            if (is_object($gateway)) {
-                                wp_redirect($gateway->get_return_url($order));
-                            } else {
-                                wp_redirect($order->get_checkout_order_received_url());
-                            }
-                            return;
-                            break;
-                        case "FAILED":
-                        default:
-                            $message = __("Payment failed on Pesepay", $this->plugin_name);
-                            $order->set_status("failed", $message);
+                        $gateway = PesePay_Helper::get_gateway_instance();
 
-                            wc_add_notice($message, "error");
+                        if (is_object($gateway)) {
+                            wp_redirect($gateway->get_return_url($order));
+                        } else {
+                            wp_redirect($order->get_checkout_order_received_url());
+                        }
+                        return;
+                        break;
+                    case "CANCELLED":
+                        $message = __("Transaction cancelled on Pesepay", $this->plugin_name);
 
-                            PesePay_Helper::log($message . " Order #: " . $order->get_id());
-                    }
-                } else {
-                    # Get error message
-                    $message = $response["data"]["transactionStatusDescription"];
-                    $order->set_status("failed", $message);
+                        wc_add_notice($message, "error");
 
-                    wc_add_notice($message, "error");
+                        PesePay_Helper::log($message . " Order #: " . $order->get_id());
 
-                    PesePay_Helper::log($response["data"]["transactionStatusDescription"]);
+                        $order->update_meta_data(PesePay_Helper::meta_key_prefix("-transaction-status"), "CANCELLED");
+                        $order->delete_meta_data(PesePay_Helper::meta_key_prefix("-check-attempts"));
+                        $order->delete_meta_data(PesePay_Helper::meta_key_prefix("-failed-verify"));
+                        $order->save_meta_data();
 
+                        pesepay_clear_status_checks($order->get_id());
+                        break;
+                    case "FAILED":
+                    default:
+                        // Pesepay reports FAILED (or a status we don't recognise).
+                        // Money may already have been deducted, so do NOT fail the
+                        // order immediately — queue a confirmation poll and let
+                        // check_pesepay_payment_status_callback() finalise it.
+                        $message = __("Payment status could not be confirmed, it will be verified automatically", $this->plugin_name);
+
+                        wc_add_notice($message, "error");
+
+                        PesePay_Helper::log($message . " Order #: " . $order->get_id() . " Ref: " . $reference);
+
+                        pesepay_queue_status_check($order->get_id(), 180);
+                        break;
                 }
             } else {
-                # Get generic error message
-                $message = __("Error retriving transaction status", $this->plugin_name);
-                $order->set_status("failed", $message);
+                # Get error message — schedule a retry rather than failing the order
+                $message = __("Error retrieving transaction status, it will be checked automatically", $this->plugin_name);
 
                 wc_add_notice($message, "error");
 
-                PesePay_Helper::log($message . " Order #: " . $order->get_id());
+                PesePay_Helper::log($response ? wp_json_encode($response) : $message . " Order #: " . $order->get_id());
+
+                pesepay_queue_status_check($order->get_id(), 60);
             }
 
             $order->save();

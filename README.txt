@@ -5,7 +5,7 @@ Tags: Pesepay, payment, woocommerce, zimbabwe, gateway
 Requires at least: 4.0.0
 Tested up to: 7.0
 Requires PHP: 7.1
-Stable tag: 1.3.0
+Stable tag: 1.4.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -44,8 +44,20 @@ If you are signing up for your own business, you simply need to click on the Sig
 
 == Changelog ==
 
+= 1.4.0 =
+* Payment status is now re-polled in the background until Pesepay returns a confirmed result.
+* A FAILED status gets a final confirmation check before the order is failed, so payments are not marked failed when the money was already deducted.
+* Unconfirmed/processing transactions are kept on hold instead of being failed prematurely.
+* Every Pesepay response is now logged and the status + reference are recorded in order notes.
+* Added a "Status Poll Attempts" gateway setting and a manual "Re-check Pesepay status" admin order action.
+
+= 1.3.4 =
+* Fixed bugs.
+
+= 1.3.3 =
+* Added test mode with dedicated test credentials.
+
 = 1.3.0 =
-* Added sandbox / test mode with dedicated test credentials and Pesepay sandbox endpoints.
 * Improved checkout messaging when Pesepay is unavailable.
 * Added admin diagnostics for Pesepay setup issues.
 * Prevented inline currency API calls during page loads to avoid slowdowns when Pesepay is unreachable.
@@ -58,6 +70,9 @@ If you are signing up for your own business, you simply need to click on the Sig
 * Initial Release.
 
 == Upgrade Notice ==
+
+= 1.4.0 =
+* Improves payment reconciliation: statuses are re-checked with automatic confirmation and pending transactions are no longer failed prematurely.
 
 = 1.3.0 =
 * Adds sandbox/test mode support. Existing live installations are unaffected — test mode is disabled by default.
